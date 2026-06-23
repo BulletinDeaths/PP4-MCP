@@ -20,10 +20,11 @@ class Agent:
             else:
                 return "У меня пока нет фактов в памяти."
         else:
+            provider = self.orchestrator.shared_memory.get('llm_provider', 'ollama')
             try:
-                ollama_response = self.orchestrator.call_ollama_api(message)
-                if ollama_response is None:
-                    raise Exception("Ollama не ответил")
-                return ollama_response
+                llm_response = self.orchestrator.ask_llm(message, provider=provider)
+                if llm_response is None:
+                    raise Exception(f"{provider} не ответил")
+                return llm_response
             except Exception:
                 return f"[Echo] Вы сказали: '{message}'"
