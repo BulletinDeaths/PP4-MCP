@@ -2,6 +2,8 @@ import os
 import json
 import subprocess
 import requests
+import logging
+
 from typing import Dict, Optional, List
 
 
@@ -57,13 +59,14 @@ class Orchestrator:
 
     def process_user_input(self, user_input: str) -> str:
         """
-        Принимает ввод от пользователя и обрабатывает его.
-        Поддерживает команду для смены активного агента.
+        Принимает ввод от пользователя.
+        Если запрос на разработку - запускает полный конвейер.
+        Если команда 'use <agent>' - переключает активного агента.
+        В остальных случаях использует текущего активного агента.
         """
-        # --- КОМАНДА ДЛЯ СМЕНЫ АГЕНТА ---
-        # Если пользователь вводит "use <имя_агента>", меняем активного агента
+        # --- КОМАНДА ДЛЯ СМЕНЫ АКТИВНОГО АГЕНТА ---
         if user_input.lower().startswith("use "):
-            agent_name = user_input[4:].strip()  # Убираем "use " и пробелы
+            agent_name = user_input[4:].strip()  # Убираем "use "
 
             if agent_name in self.available_agents:
                 self.active_agent_name = agent_name
@@ -71,30 +74,77 @@ class Orchestrator:
             else:
                 return f"Ошибка: Агент '{agent_name}' не найден. Доступные агенты: {', '.join(self.available_agents)}"
 
-        # Если пользователь просто ввел имя доступного агента, тоже переключаемся
         elif user_input.lower() in self.available_agents:
             self.active_agent_name = user_input.lower()
             return f"Агент успешно переключен на '{self.active_agent_name}'."
 
-        # --- ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ---
-        # Если не было команды смены агента, используем текущего
+        # --- НОВАЯ ЛОГИКА: ПРОВЕРКА НА ЗАПРОС РАЗРАБОТКИ ---
+        # Эта проверка теперь выполняется ВСЕГДА, если это не была команда 'use'.
+        development_keywords = ['созда', 'разработ', 'код', 'программ']
+        is_dev_task = any(keyword in user_input.lower() for keyword in development_keywords)
+
+        if is_dev_task:
+            from core.parser import Parser
+            parser = Parser()
+            result = self.execute_development_pipeline(user_input, parser)
+            return result
+
+        # --- ОБРАБОТКА ОБЫЧНОГО ЗАПРОСА ТЕКУЩИМ АКТИВНЫМ АГЕНТОМ ---
+        # Логика для обычных вопросов (как 'привет', 'как дела?')
         agent_name = getattr(self, 'active_agent_name', self.available_agents[0])
 
         try:
-            # Динамическая загрузка модуля активного агента
             agent_module = __import__(f"{self.agents_dir}.{agent_name}", fromlist=['Agent'])
             agent_instance = agent_module.Agent(orchestrator=self)
-
-            # Передаем ввод агенту и получаем ответ
             response = agent_instance.handle_message(user_input)
-
-            # Логируем взаимодействие
             self._log_interaction(user_input, response)
-
             return response
-
         except Exception as e:
             return f"Ошибка при обработке запроса агентом {agent_name}: {str(e)}"
+
+    def execute_development_pipeline(self, user_query: str, parser: 'Parser') -> str:
+        """
+        Координирует работу агентов-аналитика и разработчика.
+        :param user_query: Исходный запрос пользователя.
+        :param parser: Экземпляр класса Parser для валидации.
+        :return: Финальное сообщение для пользователя.
+        """
+        # Получаем логгер для текущего модуля (__name__ будет 'core.orchestrator')
+        logger = logging.getLogger(__name__)
+
+        logger.info("Запуск конвейера разработки...")
+
+        # --- ЭТАП 1: АНАЛИТИК ---
+        from agents.analyst import Agent as AnalystAgent
+        analyst_agent = AnalystAgent(self)
+        tze_response = analyst_agent.handle_message(user_query)
+
+        # Логируем ответ аналитика
+        self._log_interaction(user_query, tze_response)
+
+        # Проверяем, нет ли в ответе ошибки
+        if "Ошибка:" in tze_response:
+            return tze_response
+
+        # Парсим и валидируем ответ аналитика
+        parsed_tz = parser.parse_and_validate(tze_response)
+        if not parsed_tz:
+            return "Ошибка: Агент-аналитик сгенерировал некорректное техническое задание."
+
+        # Сохраняем валидированное ТЗ в общую память для следующего агента
+        self.shared_memory['analyst_result'] = json.dumps(parsed_tz)
+        # Или можно сохранить исходный текст, если DeveloperAgent сам будет его парсить
+        # self.shared_memory['analyst_result_raw'] = tze_response
+
+        # --- ЭТАП 2: РАЗРАБОТЧИК ---
+        from agents.developer import DeveloperAgent
+        developer_agent = DeveloperAgent(self)
+        code_generation_result = developer_agent.handle_message()
+
+        # Логируем результат работы разработчика
+        self._log_interaction("Разработчику передано ТЗ", code_generation_result)
+
+        return code_generation_result
 
     def _log_interaction(self, user_input: str, agent_response: str):
         """Записывает лог взаимодействия в файл."""
