@@ -1,8 +1,0 @@
-{
-  "ollama_host": "http://localhost:11434",
-  "default_model": "llama3",
-  "llm_provider": "ollama",
-  "gigachat_token": "",
-  "gigachat_api_url": "https://gigachat.devices.sberbank.ru/api/v1/chat/completions",
-  "gigachat_model": "GigaChat"
-}
